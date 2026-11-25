@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EMA200 Rejection Scanner — Binance Futures</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1020;--panel:#121a2b;--panel2:#172238;--line:#26344c;--text:#e7edf7;--muted:#91a2bc;--green:#35d49a;--red:#ff657a;--amber:#f5bd55;--blue:#71a8ff}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(135deg,#090e1a,#10192b);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:1100px;margin:auto;padding:18px}header{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
+h1{font-size:clamp(21px,4vw,30px);margin:0}h1 span{color:var(--amber)}.sub{color:var(--muted);margin-top:5px;font-size:13px}
+.controls{display:flex;gap:8px;flex-wrap:wrap}.btn,select{border:1px solid var(--line);background:var(--panel2);color:var(--text);padding:10px 12px;border-radius:10px;font-weight:650}.btn{cursor:pointer}.btn.primary{background:#2455a6;border-color:#3474d8}.btn:disabled{opacity:.55}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}.stat{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:13px}.stat b{font-size:22px;display:block}.stat small{color:var(--muted)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin:12px 0}.status{display:flex;gap:10px;align-items:center;color:var(--muted);flex-wrap:wrap}.dot{width:9px;height:9px;border-radius:50%;background:var(--amber);display:inline-block}.dot.live{background:var(--green);box-shadow:0 0 9px #35d49a66}.progress{height:6px;background:#243149;border-radius:9px;overflow:hidden;margin-top:10px}.bar{height:100%;background:linear-gradient(90deg,#548bff,#35d49a);width:0%;transition:width .2s}
+.filters{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.filters input{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:9px;padding:10px;min-width:130px}
+.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px}table{border-collapse:collapse;width:100%;min-width:850px}th,td{padding:11px 10px;text-align:left;border-bottom:1px solid #223047;white-space:nowrap}th{background:#172238;color:var(--muted);font-size:12px;position:sticky;top:0}tbody tr:hover{background:#172238}.tag{font-weight:800;border-radius:7px;padding:5px 8px}.long{color:var(--green);background:#103b30}.short{color:var(--red);background:#431d2a}.score{font-weight:800}.score.strong{color:var(--green)}.score.watch{color:var(--amber)}.muted{color:var(--muted)}.small{font-size:12px;color:var(--muted)}.notice{color:var(--amber);font-size:13px;line-height:1.5}.empty{text-align:center;padding:25px;color:var(--muted)}
+@media(max-width:650px){.wrap{padding:12px}.stats{grid-template-columns:repeat(2,1fr)}.stat{padding:10px}.controls{width:100%}.controls>*{flex:1}.panel{padding:11px}}
+</style>
+</head>
+<body><div class="wrap">
+<header><div><h1>EMA <span>200</span> Rejection Scanner</h1><div class="sub">Binance USDⓈ-M perpetuals · 5-minute closed candles · Long & Short</div></div>
+<div class="controls"><select id="universe"><option value="100">Top 100 by 24h quote volume</option><option value="250">Top 250</option><option value="500" selected>Top 500</option></select><button class="btn primary" id="scan">Scan now</button><button class="btn" id="auto">Auto: ON</button></div></header>
+<div class="stats"><div class="stat"><b id="scanned">0</b><small>Pairs scanned</small></div><div class="stat"><b id="longs" style="color:var(--green)">0</b><small>Long rejections</small></div><div class="stat"><b id="shorts" style="color:var(--red)">0</b><small>Short rejections</small></div><div class="stat"><b id="updated">—</b><small>Last scan (local)</small></div></div>
+<div class="panel"><div class="status"><span class="dot" id="dot"></span><span id="status">Ready — press Scan now.</span><span class="small" id="next"></span></div><div class="progress"><div class="bar" id="bar"></div></div>
+<div class="notice" style="margin-top:10px">Signal rules: EMA200 proximity/touch within 0.15 ATR, wick ≥ 1.5× body, rejection candle closes beyond EMA, volume ≥ 1.2× its 20-candle average. Only completed 5m candles are used. Score 70+ shown; 85+ marked strong. No trade is guaranteed.</div></div>
+<div class="filters"><input id="search" placeholder="Filter symbol (e.g. BTC)"><select id="direction"><option value="ALL">Long + Short</option><option value="LONG">Long only</option><option value="SHORT">Short only</option></select><select id="minimum"><option value="70">Score ≥ 70</option><option value="80">Score ≥ 80</option><option value="85">Score ≥ 85</option></select></div>
+<div class="table-wrap"><table><thead><tr><th>Pair</th><th>Signal</th><th>Score</th><th>Closed price</th><th>EMA200</th><th>Wick/body</th><th>Volume</th><th>5m candle close</th><th>Invalidation ref</th></tr></thead><tbody id="rows"><tr><td colspan="9" class="empty">No scan yet.</td></tr></tbody></table></div>
+<div class="small" style="margin-top:10px">Data: Binance public USDⓈ-M Futures API. Browser access may be blocked by network/CORS in some environments. Scan frequency is 5 minutes; the scan itself can take a few minutes for 500 symbols.</div>
+</div>
+<script>
+const API='https://fapi.binance.com';
+let auto=true, timer=null, scanning=false, results=[];
+const $=id=>document.getElementById(id);
+const fmt=(x,d=6)=>Number(x).toLocaleString(undefined,{maximumFractionDigits:d});
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function get(url){const ctl=new AbortController();const t=setTimeout(()=>ctl.abort(),12000);try{const r=await fetch(url,{signal:ctl.signal});if(!r.ok)throw Error('HTTP '+r.status);return await r.json()}finally{clearTimeout(t)}}
+function ema(values,len){let k=2/(len+1),e=values[0];for(let i=1;i<values.length;i++)e=values[i]*k+e*(1-k);return e}
+function sma(a,n){return a.slice(-n).reduce((s,v)=>s+v,0)/n}
+function evaluate(sym,kl){
+ // Use only closed bars: Binance returns latest unfinished bar at end
+ const bars=kl.slice(0,-1); if(bars.length<220)return null;
+ const c=bars.map(x=>+x[4]),h=bars.map(x=>+x[2]),l=bars.map(x=>+x[3]),o=bars.map(x=>+x[1]),v=bars.map(x=>+x[5]);
+ const i=bars.length-1, close=c[i], open=o[i], high=h[i], low=l[i];
+ const e=ema(c.slice(-220),200);
+ const tr=[];for(let j=Math.max(1,i-13);j<=i;j++)tr.push(Math.max(h[j]-l[j],Math.abs(h[j]-c[j-1]),Math.abs(l[j]-c[j-1])));
+ const atr=tr.reduce((a,b)=>a+b,0)/tr.length;
+ const body=Math.max(Math.abs(close-open),1e-12), uw=high-Math.max(open,close),lw=Math.min(open,close)-low,range=Math.max(high-low,1e-12),pos=(close-low)/range;
+ const volAvg=sma(v.slice(0,i),20), volOK=v[i]>volAvg*1.2;
+ const proximity=.15*atr, ratioL=lw/body,ratioS=uw/body;
+ const longTouch=low<=e+proximity, shortTouch=high>=e-proximity;
+ const long=longTouch&&close>e&&lw>=1.5*body&&pos>=.60&&close>open;
+ const short=shortTouch&&close<e&&uw>=1.5*body&&pos<=.40&&close<open;
+ const wickL=Math.min(25,ratioL*10),wickS=Math.min(25,ratioS*10);
+ const scoreL=(long?40:0)+wickL+(volOK?20:0)+(pos>=.75?15:pos>=.60?10:0);
+ const scoreS=(short?40:0)+wickS+(volOK?20:0)+(pos<=.25?15:pos<=.40?10:0);
+ let sig=null,score=0,wick=0,invalid=0;
+ if(long&&scoreL>=+$('minimum').value){sig='LONG';score=scoreL;wick=ratioL;invalid=low}
+ if(short&&scoreS>=+$('minimum').value&&scoreS>score){sig='SHORT';score=scoreS;wick=ratioS;invalid=high}
+ if(!sig)return null;
+ return {symbol:sym,signal:sig,score:Math.round(score),close,ema:e,wick,volOK,vol:v[i],volAvg,closeTime:bars[i][6],invalid};
+}
+function render(){
+ const q=$('search').value.trim().toUpperCase(),d=$('direction').value,m=+$ $('minimum').value;
+ const arr=results.filter(x=>(!q||x.symbol.includes(q))&&(d==='ALL'||x.signal===d)&&x.score>=m).sort((a,b)=>b.score-a.score);
+ $('longs').textContent=results.filter(x=>x.signal==='LONG').length;
+ $('shorts').textContent=results.filter(x=>x.signal==='SHORT').length;
+ $('rows').innerHTML=arr.length?arr.map(x=>`<tr><td><b>${x.symbol}</b></td><td><span class="tag ${x.signal.toLowerCase()}">${x.signal}</span></td><td class="score ${x.score>=85?'strong':'watch'}">${x.score}${x.score>=85?' ★':''}</td><td>${fmt(x.close,8)}</td><td>${fmt(x.ema,8)}</td><td>${x.wick.toFixed(2)}×</td><td>${x.volOK?'✓ Strong':'—'} <span class="small">${fmt(x.vol,3)}</span></td><td>${new Date(x.closeTime).toLocaleString()}</td><td>${fmt(x.invalid,8)}</td></tr>`).join(''):`<tr><td colspan="9" class="empty">No matching rejection signals found in this scan.</td></tr>`;
+}
+async function scan(){
+ if(scanning)return;scanning=true;$('scan').disabled=true;$('dot').classList.add('live');$('status').textContent='Loading market list…';$('bar').style.width='0%';results=[];
+ try{
+  const [info,tickers]=await Promise.all([get(API+'/fapi/v1/exchangeInfo'),get(API+'/fapi/v1/ticker/24hr')]);
+  const tv=new Map(tickers.map(t=>[t.symbol,t]));
+  const universe=info.symbols.filter(s=>s.status==='TRADING'&&s.contractType==='PERPETUAL'&&s.quoteAsset==='USDT').map(s=>s.symbol).filter(sym=>tv.has(sym)).sort((a,b)=>+(tv.get(b).quoteVolume||0)-+(tv.get(a).quoteVolume||0)).slice(0,+$('universe').value);
+  $('status').textContent=`Scanning ${universe.length} pairs…`;
+  let done=0, found=[];
+  // modest concurrency, avoids flooding API
+  for(let start=0;start<universe.length;start+=8){
+    const batch=universe.slice(start,start+8);
+    const settled=await Promise.allSettled(batch.map(async sym=>{const kl=await get(API+'/fapi/v1/klines?symbol='+sym+'&interval=5m&limit=230');return evaluate(sym,kl)}));
+    for(const r of settled){if(r.status==='fulfilled'&&r.value)found.push(r.value);done++}
+    $('bar').style.width=(done/universe.length*100).toFixed(1)+'%';
+    $('status').textContent=`Scanning… ${done}/${universe.length} pairs · ${found.length} matches`;
+    if(start+8<universe.length)await sleep(160);
+  }
+  results=found;$('scanned').textContent=done;$('updated').textContent=new Date().toLocaleTimeString();render();
+  $('status').textContent=`Scan complete: ${found.length} qualifying rejection(s).`; 
+ }catch(e){$('status').textContent='Scan failed: '+e.message+' — API/network/CORS may block browser requests.';$('rows').innerHTML=`<tr><td colspan="9" class="empty">Unable to fetch data. Try again or use a hosted copy/browser network.</td></tr>`}
+ finally{scanning=false;$('scan').disabled=false;$('dot').classList.remove('live')}
+}
+function schedule(){clearInterval(timer);if(auto)timer=setInterval(scan,5*60*1000);$('auto').textContent='Auto: '+(auto?'ON':'OFF')}
+$('scan').onclick=scan;$('auto').onclick=()=>{auto=!auto;schedule()};$('search').oninput=render;$('direction').onchange=render;$('minimum').onchange=render;$('universe').onchange=()=>{if(!scanning)scan()};
+schedule();
+</script></body></html>
